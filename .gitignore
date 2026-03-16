@@ -1,0 +1,36 @@
+# Data (large CT volumes)
+data/raw/
+data/preprocessed/
+
+# Trained models and caches
+model/base_models/*.pth
+model/stacking_classifier.pth
+model/stacking_cache/
+model/training_states/
+
+# Results
+results/*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

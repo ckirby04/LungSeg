@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "lungseg"
+version = "0.1.0"
+description = "Lung CT segmentation using stacking ensemble of 3D U-Nets"
+readme = "data/README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0",
+    "monai>=1.3",
+    "nibabel>=5.0",
+    "SimpleITK>=2.3",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.2",
+    "pandas>=2.0",
+    "pydicom>=2.4",
+    "matplotlib>=3.7",
+    "tqdm>=4.65",
+    "pyyaml>=6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

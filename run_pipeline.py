@@ -37,6 +37,7 @@ RAW_DIR = ROOT / "data" / "raw"
 MSD_DIR = RAW_DIR / "Task06_Lung"
 MSD_TAR = RAW_DIR / "Task06_Lung.tar"
 PREPROCESSED_DIR = ROOT / "data" / "preprocessed" / "train"
+COMBINED_DIR = ROOT / "data" / "preprocessed" / "combined"
 MODEL_DIR = ROOT / "model"
 BASE_MODEL_DIR = MODEL_DIR / "base_models"
 RESULTS_DIR = ROOT / "results"
@@ -259,10 +260,12 @@ def main():
     )
     parser.add_argument(
         "--step", type=str, default="all",
-        choices=["all", "extract", "preprocess", "train", "train-base",
+        choices=["all", "extract", "preprocess", "combine", "train", "train-base",
                  "train-stacking", "eval"],
         help="Which pipeline step to run (default: all)"
     )
+    parser.add_argument("--combined", action="store_true",
+                        help="Use combined multi-dataset directory for training")
     parser.add_argument("--epochs", type=int, default=250,
                         help="Training epochs for base models (default: 250)")
     parser.add_argument("--stacking-epochs", type=int, default=150,
@@ -279,6 +282,11 @@ def main():
         args.epochs = 20
         args.stacking_epochs = 30
 
+    # Use combined dataset if flag set or combine step requested
+    global PREPROCESSED_DIR
+    if args.combined or args.step == "combine":
+        PREPROCESSED_DIR = COMBINED_DIR
+
     start = time.time()
 
     print(f"""
@@ -294,9 +302,19 @@ def main():
 ================================================================================
 """)
 
+    COMBINE_SCRIPT = ROOT / "scripts" / "preprocessing" / "combine_datasets.py"
+
+    def step_combine():
+        banner("STEP: Combine all datasets")
+        return run(
+            [PYTHON, str(COMBINE_SCRIPT)],
+            "Combining MSD + COVID-19 + NSCLC-Radiomics + RIDER datasets"
+        )
+
     steps = {
         "extract": step_extract,
         "preprocess": step_preprocess,
+        "combine": step_combine,
         "train-base": lambda: step_train_base(args.epochs, args.patches_per_volume,
                                                args.gpu0, args.gpu1),
         "train-stacking": lambda: step_train_stacking(args.stacking_epochs),

@@ -1,66 +1,115 @@
 # LungSeg
 
-Automated lung tumor segmentation from CT scans using a stacking ensemble of 3D U-Nets. The system trains four base models at different patch scales (8, 12, 24, 36) and fuses their predictions with a lightweight CNN meta-learner, achieving robust segmentation across lesion sizes.
+Automated lung tumor segmentation from CT scans using a stacking ensemble of multi-scale 3D U-Nets and nnU-Net. The system trains six base models — four custom `LightweightUNet3D` at different patch scales (8, 12, 24, 36) plus nnU-Net 3D and 2D — and fuses their predictions with a lightweight 3D CNN meta-learner.
+
+Trained on **504 tumor-only cases** from four public datasets (MSD Task06, NSCLC-Radiomics, RIDER Lung CT, NSCLC-Interobserver).
 
 ## Architecture
 
 ```
-                        CT Volume (1-channel)
-                              |
-            +---------+-------+-------+---------+
-            |         |               |         |
-        8-patch   12-patch       24-patch   36-patch
-        U-Net      U-Net          U-Net      U-Net
-            |         |               |         |
-            +---------+-------+-------+---------+
-                              |
-                    Stacking Features
-                  (4 preds + variance + range)
-                              |
-                    Stacking Classifier
-                     (3D CNN, ~25K params)
-                              |
-                    Final Segmentation Mask
+                           CT Volume (1-channel)
+                                 |
+         +----------+----------+-+----------+----------+
+         |          |          |            |           |
+     8-patch    12-patch   24-patch    36-patch     nnU-Net
+      U-Net      U-Net      U-Net      U-Net     3D + 2D
+         |          |          |            |           |
+         +----------+----------+------------+----------+
+                                 |
+                       Stacking Features
+                (6 preds + variance + range = 8ch)
+                                 |
+                       Stacking Classifier
+                        (3D CNN, ~25K params)
+                                 |
+                       Final Segmentation Mask
 ```
 
-**Base Models** — `LightweightUNet3D` with attention gates and residual connections (single-channel input, ~85K params each).
+**Custom Base Models** — `LightweightUNet3D` with attention gates and residual connections (~85K params each). Each trained at a different patch scale to capture fine-to-coarse tumor features.
 
-**Stacking Classifier** — 3D CNN meta-learner with residual blocks that takes 6-channel input (4 base predictions + inter-model variance + prediction range) and outputs the final fused segmentation.
+**nnU-Net Models** — Auto-configured 3D full-resolution and 2D U-Nets (nnU-Net v2) trained for 1000 epochs with automatic preprocessing, architecture search, and data augmentation.
+
+**Stacking Classifier** — 3D CNN meta-learner with residual blocks. Takes 8-channel input (6 base predictions + inter-model variance + prediction range) and outputs the fused segmentation.
+
+## Results
+
+Trained on 504 tumor-only cases, evaluated on 75 held-out cases:
+
+| Method | Dice | Sensitivity | Precision |
+|--------|------|-------------|-----------|
+| **Stacking (6 models)** | **0.732** | **0.793** | **0.749** |
+| Simple average | 0.562 | 0.652 | 0.582 |
+| 36-patch alone | 0.553 | 0.733 | 0.513 |
+| 24-patch alone | 0.501 | 0.562 | 0.532 |
+
+- **Median Dice: 0.849** (83% of cases above 0.7)
+- **Top cases: 0.93-0.96 Dice**
+- Best custom base model: 24-patch at 0.882 patch-level Dice (epoch 627/1000)
+
+## Dataset
+
+Combined from four public sources (tumor annotations only, COVID infection masks excluded):
+
+| Dataset | Cases | Source |
+|---------|-------|--------|
+| [MSD Task06_Lung](http://medicaldecathlon.com/) | 63 | Medical Segmentation Decathlon |
+| [NSCLC-Radiomics](https://www.cancerimagingarchive.net/collection/nsclc-radiomics/) | 408 | TCIA (DICOM SEG) |
+| [RIDER Lung CT](https://wiki.cancerimagingarchive.net/pages/viewpage.action?pageId=46334165) | 31 | TCIA (DICOM SEG) |
+| [NSCLC-Interobserver1](https://www.cancerimagingarchive.net/collection/nsclc-radiomics-interobserver1/) | 2 | TCIA (DICOM SEG) |
+| **Total** | **504** | |
+
+All cases are preprocessed to 256^3 volumes at ~1mm isotropic spacing with binary tumor masks.
 
 ## Project Structure
 
 ```
 LungSeg/
 ├── configs/
-│   └── models.yaml                # Model registry & ensemble configuration
+│   └── models.yaml                     # Model registry & ensemble config
 ├── data/
-│   └── README.md                  # Data format documentation
+│   ├── preprocessed/
+│   │   ├── combined/                   # All datasets merged (524 cases)
+│   │   ├── tumor_only/                 # Tumor-only subset (504 cases)
+│   │   └── train/                      # MSD-only (legacy)
+│   └── raw/                            # Raw downloads (DICOM, NIfTI, zips)
 ├── model/
-│   └── base_models/               # Trained model checkpoints
+│   ├── base_models/                    # Custom U-Net checkpoints (.pth + state.json)
+│   ├── stacking_cache/                 # Cached base model predictions (.npz)
+│   ├── stacking_classifier.pth         # Trained meta-learner
+│   └── stacking_results.json           # Per-method evaluation
+├── nnUNet/
+│   ├── nnUNet_raw/                     # nnU-Net dataset format
+│   ├── nnUNet_preprocessed/            # nnU-Net auto-preprocessed data
+│   └── nnUNet_results/                 # nnU-Net trained models
 ├── scripts/
-│   ├── evaluation/
-│   │   └── evaluate.py            # Full evaluation pipeline
-│   ├── inference/
-│   │   └── run_inference.py       # End-to-end inference on new CT volumes
 │   ├── preprocessing/
-│   │   └── preprocess_lung.py     # Data preprocessing (MSD, NIfTI, DICOM)
-│   └── training/
-│       ├── train_base_model.py    # Train individual base models
-│       ├── train_stacking.py      # Train stacking classifier
-│       └── overnight.py           # Full multi-phase training pipeline
+│   │   ├── preprocess_lung.py          # Raw data preprocessing (MSD, NIfTI, DICOM)
+│   │   ├── combine_datasets.py         # Multi-dataset download & conversion
+│   │   └── download_tcia.py            # Resumable TCIA downloader
+│   ├── training/
+│   │   ├── train_full_pipeline.py      # Full pipeline (custom + nnU-Net + stacking)
+│   │   ├── train_base_model.py         # Train individual custom base models
+│   │   ├── train_stacking.py           # Train stacking classifier
+│   │   ├── setup_nnunet.py             # Convert data to nnU-Net format
+│   │   ├── restacking_with_nnunet.py   # Re-run stacking with nnU-Net predictions
+│   │   └── train_tumor_only.py         # Tumor-only training (no COVID)
+│   ├── evaluation/
+│   │   └── evaluate.py                 # Full evaluation pipeline
+│   └── inference/
+│       └── run_inference.py            # Inference on new CT volumes
 ├── src/segmentation/
-│   ├── unet.py                    # LightweightUNet3D architecture
-│   ├── enhanced_unet.py           # DeepSupervisedUNet3D, HybridUNet3D variants
-│   ├── dataset.py                 # LungCTDataset loader
-│   ├── advanced_losses.py         # SmallLesionOptimizedLoss + others
-│   ├── augmentation.py            # MONAI augmentation pipeline
-│   ├── stacking.py                # Stacking classifier & ensemble logic
-│   ├── inference.py               # Inference utilities
-│   ├── tta.py                     # Test-time augmentation
-│   ├── postprocessing.py          # Morphological post-processing
-│   └── weighted_sampling.py       # Weighted sampling for imbalanced data
-├── results/                       # Evaluation outputs
-├── run_pipeline.py                # Unified preprocess → train → eval script
+│   ├── unet.py                         # LightweightUNet3D architecture
+│   ├── enhanced_unet.py                # Deep supervised U-Net variants
+│   ├── dataset.py                      # LungCTDataset loader
+│   ├── advanced_losses.py              # SmallLesionOptimizedLoss + others
+│   ├── augmentation.py                 # MONAI augmentation pipeline
+│   ├── stacking.py                     # Stacking classifier & ensemble logic
+│   ├── inference.py                    # Inference utilities
+│   ├── tta.py                          # Test-time augmentation
+│   ├── postprocessing.py               # Morphological post-processing
+│   └── weighted_sampling.py            # Weighted sampling for imbalanced data
+├── results/                            # Evaluation outputs
+├── run_pipeline.py                     # Simple pipeline (MSD-only, legacy)
 ├── requirements.txt
 └── pyproject.toml
 ```
@@ -73,122 +122,54 @@ LungSeg/
 git clone https://github.com/ckirby04/LungSeg.git
 cd LungSeg
 pip install -r requirements.txt
+pip install nnunetv2
 ```
 
-Requires Python 3.9+ and a CUDA-capable GPU. Key dependencies:
+Requires Python 3.9+ and CUDA-capable GPU(s). Key dependencies:
 
 | Package | Purpose |
 |---------|---------|
 | PyTorch | Deep learning framework |
+| nnU-Net v2 | State-of-the-art medical segmentation |
 | MONAI | Medical imaging transforms & augmentation |
-| nibabel | NIfTI file I/O |
-| SimpleITK | Image resampling & preprocessing |
-| scipy | Scientific computing & morphology |
+| nibabel / SimpleITK | NIfTI and DICOM I/O |
+| tcia-utils | TCIA dataset downloads |
 
-### 2. Get Data
-
-Download the [Medical Segmentation Decathlon](http://medicaldecathlon.com/) Task06_Lung dataset (~63 cases, 9.2 GB):
+### 2. Download & Prepare Data
 
 ```bash
-# Place the tar file in data/raw/
-mkdir -p data/raw
-# Download Task06_Lung.tar into data/raw/
+# Download all public datasets (NSCLC-Radiomics, RIDER, COVID-19, MSD)
+python scripts/preprocessing/combine_datasets.py
+
+# Or download TCIA datasets separately (resumable)
+python scripts/preprocessing/download_tcia.py --dataset all
+python scripts/preprocessing/combine_datasets.py
 ```
 
-Other supported datasets:
-- **NSCLC-Radiomics** — larger dataset with CT + contours
-- **LCTSC** — Lung CT Segmentation Challenge
-
-### 3. Run the Full Pipeline
+### 3. Run the Full Training Pipeline
 
 ```bash
-# Full pipeline: extract → preprocess → train → evaluate
-python run_pipeline.py
-
-# Quick test run (20 epochs) to validate setup
-python run_pipeline.py --quick
-
-# Custom configuration
-python run_pipeline.py --epochs 100 --patches-per-volume 8
+# Full BrainMetScan-style pipeline:
+# 4 custom U-Nets (1000 ep) → nnU-Net 3D + 2D (1000 ep) → stacking → eval
+python scripts/training/train_full_pipeline.py
 ```
 
-## Usage
+Skip phases if models are already trained:
+```bash
+python scripts/training/train_full_pipeline.py --skip-custom     # nnU-Net + stacking only
+python scripts/training/train_full_pipeline.py --skip-nnunet      # custom + stacking only
+python scripts/training/train_full_pipeline.py --skip-base        # stacking + eval only
+```
 
-### Pipeline Steps
+### 4. Re-run Stacking with nnU-Net
 
-The `run_pipeline.py` script supports running individual steps:
+After all base models are trained, fuse all 6 models into the stacking classifier:
 
 ```bash
-python run_pipeline.py --step preprocess       # Only preprocess raw data
-python run_pipeline.py --step train-base       # Only train base models
-python run_pipeline.py --step train-stacking   # Only train stacking classifier
-python run_pipeline.py --step train            # Train base + stacking
-python run_pipeline.py --step eval             # Only evaluate
+python scripts/training/restacking_with_nnunet.py
 ```
 
-### Preprocessing
-
-Converts raw CT data to standardized format (isotropic 1mm spacing, 256^3 volumes):
-
-```bash
-# MSD format
-python scripts/preprocessing/preprocess_lung.py \
-    --input-dir data/raw/Task06_Lung \
-    --output-dir data/preprocessed/train \
-    --format msd
-
-# NIfTI pairs (ct.nii.gz + seg.nii.gz per case)
-python scripts/preprocessing/preprocess_lung.py \
-    --input-dir data/raw/my_dataset \
-    --output-dir data/preprocessed/train \
-    --format nifti
-
-# DICOM series
-python scripts/preprocessing/preprocess_lung.py \
-    --input-dir data/raw/dicom_cases \
-    --output-dir data/preprocessed/train \
-    --format dicom
-```
-
-### Training Base Models
-
-Each base model is a `LightweightUNet3D` trained at a specific patch scale:
-
-```bash
-python scripts/training/train_base_model.py --patch-size 8 --gpu 0 --epochs 250
-python scripts/training/train_base_model.py --patch-size 12 --gpu 0 --epochs 250
-python scripts/training/train_base_model.py --patch-size 24 --gpu 1 --epochs 250
-python scripts/training/train_base_model.py --patch-size 36 --gpu 1 --epochs 250
-```
-
-Training features:
-- **SmallLesionOptimizedLoss** — weighted combination of Tversky (60%), Focal (25%), and Sensitivity (15%) losses, tuned for detecting small tumors
-- **MONAI augmentation** — random flips, rotations, affine transforms, intensity perturbations (30% probability)
-- **Hybrid weighted sampling** — oversamples cases with small lesions and difficult cases
-- **Cosine annealing** — learning rate schedule with warm restarts
-
-### Training the Stacking Classifier
-
-After base models are trained, the stacking classifier learns to fuse their predictions:
-
-```bash
-python scripts/training/train_stacking.py \
-    --data-dir data/preprocessed/train \
-    --epochs 150 \
-    --stacking-patch 32
-```
-
-This script:
-1. Generates sliding-window predictions from all 4 base models
-2. Caches predictions to disk (resumable)
-3. Builds 6-channel stacking features (4 predictions + variance + range)
-4. Trains a lightweight CNN meta-learner
-5. Tunes per-method thresholds
-6. Runs failure analysis on worst cases
-
-### Inference
-
-Run inference on new CT volumes:
+### 5. Inference
 
 ```bash
 python scripts/inference/run_inference.py \
@@ -196,81 +177,58 @@ python scripts/inference/run_inference.py \
     --output path/to/prediction.nii.gz
 ```
 
-### Evaluation
-
-Evaluate the full ensemble on the validation set:
-
-```bash
-python scripts/evaluation/evaluate.py --threshold 0.9
-```
-
-Metrics reported:
-- **Voxel-level Dice** — overall segmentation overlap
-- **Lesion-level F1 / Recall / Precision** — detection performance
-- **Size-stratified Dice** — breakdown by lesion size (tiny, small, medium, large)
-
 ## Training Details
 
-### Multi-Scale Patch Strategy
+### Custom Base Models (4x LightweightUNet3D)
 
-| Patch Size | Receptive Field | Strength |
-|-----------|----------------|----------|
-| 8^3 | Fine-grained | Small lesion detail |
-| 12^3 | Local context | Small-to-medium lesions |
-| 24^3 | Regional context | Medium lesions |
-| 36^3 | Wide context | Large lesions, global structure |
+| Model | Patch Size | Best Dice | Best Epoch | Sensitivity |
+|-------|-----------|-----------|------------|-------------|
+| 8-patch | 8^3 | 0.863 | 637 | 0.897 |
+| 12-patch | 12^3 | 0.877 | 587 | 0.930 |
+| 24-patch | 24^3 | 0.882 | 627 | 0.921 |
+| 36-patch | 36^3 | 0.880 | 605 | 0.930 |
+
+All trained for 1000 epochs with:
+- **SmallLesionOptimizedLoss** — Tversky (60%) + Focal (25%) + Sensitivity (15%)
+- **MONAI augmentation** — flips, rotations, affine, intensity perturbations
+- **Cosine annealing** with warm restarts
+- **10 patches/volume**, learning rate 0.0005
+
+### nnU-Net Models
+
+Auto-configured by nnU-Net v2 experiment planner:
+
+| Config | Patch Size | Batch | Architecture |
+|--------|-----------|-------|-------------|
+| 3D fullres | 128^3 | 2 | 6-stage PlainConvUNet (32-320 features) |
+| 2D | 256x256 | 49 | 7-stage PlainConvUNet (32-512 features) |
+
+Both trained for 1000 epochs with nnU-Net default training (Dice+CE loss, SGD, poly LR).
 
 ### GPU Requirements
 
-The overnight pipeline trains models in parallel across 2 GPUs:
+Trained on 2x NVIDIA RTX 3070 Ti (8GB each):
 
 | Phase | GPU 0 | GPU 1 | Time |
 |-------|-------|-------|------|
-| Batch 1 | 8-patch | 24-patch | ~3-4h |
-| Batch 2 | 12-patch | 36-patch | ~3-4h |
-| Stacking | Classifier training | — | ~3-4h |
-| Evaluation | Full eval | — | ~1h |
-
-Single-GPU training is also supported — models will train sequentially.
+| Custom batch 1 | 8-patch | 24-patch | ~8h |
+| Custom batch 2 | 12-patch | 36-patch | ~8h |
+| nnU-Net 3D | 3D fullres | — | ~24h |
+| nnU-Net 2D | — | 2D | ~24h |
+| Stacking | Meta-learner | — | ~4h |
 
 ### Data Format
 
 After preprocessing, each case is stored as:
 
 ```
-data/preprocessed/train/
-  case_001/
-    ct.nii.gz       # Float32, resampled to 1mm isotropic, 256x256x256
+data/preprocessed/combined/
+  nsclc_LUNG1-001/
+    ct.nii.gz       # Float32, ~1mm isotropic, 256x256x256
     seg.nii.gz      # Binary mask (uint8), 0 = background, 1 = tumor
-  case_002/
-    ...
 ```
 
-CT values are windowed to [-1000, 400] HU and normalized to [0, 1] during training.
-
-## Configuration
-
-Model and inference settings are defined in `configs/models.yaml`:
-
-```yaml
-ensemble:
-  fusion_mode: "stacking"
-  default_threshold: 0.5
-
-stacking:
-  path: "model/stacking_classifier.pth"
-  in_channels: 6          # 4 predictions + variance + range
-  patch_size: 32
-  overlap: 0.5
-  threshold: 0.9
-
-inference:
-  window_size: [96, 96, 96]
-  overlap: 0.75
-  use_tta: false
-  postprocessing:
-    min_size: 15           # Remove components smaller than 15 voxels
-```
+CT values windowed to [-1000, 400] HU and normalized to [0, 1] during training.
 
 ## License
 
@@ -278,6 +236,8 @@ This project is for research and educational purposes.
 
 ## Acknowledgments
 
-- [Medical Segmentation Decathlon](http://medicaldecathlon.com/) for the Task06_Lung dataset
+- [Medical Segmentation Decathlon](http://medicaldecathlon.com/) for Task06_Lung
+- [The Cancer Imaging Archive (TCIA)](https://www.cancerimagingarchive.net/) for NSCLC-Radiomics, RIDER, and Interobserver datasets
+- [nnU-Net](https://github.com/MIC-DKFZ/nnUNet) for auto-configured segmentation
 - [MONAI](https://monai.io/) for medical imaging transforms
 - [PyTorch](https://pytorch.org/) deep learning framework

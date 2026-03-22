@@ -6,7 +6,12 @@ data/preprocessed/
 model/base_models/*.pth
 model/stacking_classifier.pth
 model/stacking_cache/
+model/stacking_cache_6model/
 model/training_states/
+model/*.json
+
+# nnU-Net (large preprocessed data, checkpoints, results)
+nnUNet/
 
 # Results
 results/*.json
@@ -34,3 +39,4 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+._*

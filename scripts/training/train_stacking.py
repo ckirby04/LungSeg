@@ -21,6 +21,7 @@ Resumable - caches base model predictions to avoid regenerating.
 
 import gc
 import json
+import os
 import sys
 import argparse
 import random
@@ -581,7 +582,7 @@ def main():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_dir = ROOT / 'model'
-    cache_dir = ROOT / 'model' / args.cache_dir
+    cache_dir = Path(args.cache_dir) if os.path.isabs(args.cache_dir) else ROOT / 'model' / args.cache_dir
     state_dir = model_dir / 'training_states'
     state_dir.mkdir(parents=True, exist_ok=True)
 
